@@ -1,0 +1,83 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Storage;
+use App\Models\Image;
+use Illuminate\Support\Str;
+
+class ImageController extends Controller
+{
+    public function index()
+    {
+        $images = Image::latest()->get();
+        return view('images.index', compact('images'));
+    }
+
+    public function create()
+    {
+        return view('images.create');
+    }
+
+    public function store(Request $request)
+    {
+        $request->validate([
+            'image' => 'required|image|mimes:jpeg,png,jpg,gif|max:2048'
+        ]);
+
+        try {
+            $file = $request->file('image');
+            $originalName = $file->getClientOriginalName();
+            $filename = Str::random(40) . '.' . $file->getClientOriginalExtension();
+            
+            // Upload ke MinIO
+            $path = Storage::disk('minio')->putFileAs('images', $file, $filename);
+            
+            // Generate URL
+            $url = Storage::disk('minio')->url($path);
+            
+            // Simpan ke database
+            $image = Image::create([
+                'filename' => $filename,
+                'original_name' => $originalName,
+                'path' => $path,
+                'mime_type' => $file->getMimeType(),
+                'size' => $file->getSize()
+            ]);
+            
+            return redirect()->route('images.index')
+                ->with('success', 'Image uploaded successfully!')
+                ->with('url', $url);
+                
+        } catch (\Exception $e) {
+            return back()->with('error', 'Upload failed: ' . $e->getMessage());
+        }
+    }
+
+    public function show($id)
+    {
+        $image = Image::findOrFail($id);
+        $url = Storage::disk('minio')->url($image->path);
+        return view('images.show', compact('image', 'url'));
+    }
+
+    public function destroy($id)
+    {
+        try {
+            $image = Image::findOrFail($id);
+            
+            // Hapus dari MinIO
+            Storage::disk('minio')->delete($image->path);
+            
+            // Hapus dari database
+            $image->delete();
+            
+            return redirect()->route('images.index')
+                ->with('success', 'Image deleted successfully!');
+                
+        } catch (\Exception $e) {
+            return back()->with('error', 'Delete failed: ' . $e->getMessage());
+        }
+    }
+}
